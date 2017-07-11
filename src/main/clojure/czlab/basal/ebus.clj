@@ -49,297 +49,223 @@
 ;;
 (defn _listen "" [repeat? topics selector target more]
   ;; for each topic, subscribe to it.
-  (let [ts topics.trim().split(/\s+/)
+  (let [ts (cs/split topics #"\s+")
         rc (map #(_addSub repeat? % selector target more) ts)]
-  return R.reject( z => { return z.length===0; }, rc);
-}
+    (filterv #(> (count %) 0) rc)))
 
-//////////////////////////////////////////////////////////////////////////////
-const _doSub = (node,token) => {
-  if (! sjs.hasKey(node.tree, token)) {
-    node.tree[token] = mkTreeNode();
-  }
-  return node.tree[token];
-}
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn _doSub "" [node token]
+  (if-not (contains? (:tree node) token)
+    (update-in node
+               [:tree]
+               assoc token (mkTreeNode)))
+  (get (:tree node) token))
 
-//////////////////////////////////////////////////////////////////////////////
-const _addSub = function(repeat, topic, selector, target, more) {
-  let tkns= this.splitTopic(topic),
-  rcid='';
-  if (tkns.length > 0) {
-    const rc= mkSubSCR(topic, selector, target, repeat, more),
-    node= R.reduce((memo, z) => {
-      return _doSub(memo,z);
-    },
-    this.root, tkns);
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn _addSub "" [repeat? topic selector target more]
+  (let [tkns (splitTopic topic)]
+    (when-not (empty? tkns)
+      (let [rc (mkSubSCR topic selector target repeat? more)
+            node (reduce #(_doSub %1 %2) this_root tkns)]
+        (update-in this_subs
+                   assoc (:id rc) rc)
+        (update-in node
+                   [:subs] conj rc)
+        (:id rc)))))
 
-    this.subs[rc.id] = rc;
-    node.subs.push(rc);
-    rcid= rc.id;
-  }
-  return rcid;
-}
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn _unSub "" [node tokens pos sub]
+  (if node (_unSub node tokens pos sub)))
 
-//////////////////////////////////////////////////////////////////////////////
-const _unSub = function(node, tokens, pos, sub) {
-  if (! sjs.echt(node)) { return; }
-  if (pos < tokens.length) {
-    const k= tokens[pos],
-    cn= node.tree[k];
-    _unSub.call(this, cn, tokens, pos+1, sub);
-    if (R.keys(cn.tree).length === 0 &&
-        cn.subs.length === 0) {
-      delete node.tree[k];
-    }
-  } else {
-    pos = -1;
-    R.find( z => {
-      pos += 1;
-      if (z.id === sub.id) {
-        delete this.subs[z.id];
-        node.subs.splice(pos,1);
-        return true;
-      }
-    }, node.subs);
-  }
-}
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn _unSub "" [node tokens pos sub]
+  (if (< pos (count tokens))
+    (let [k (aget tokens pos)
+          cn (get (:tree node) k)
+          _ (_unSub this cn tokens (inc pos) sub)]
+      (if (and (empty? (:tree cn))
+               (empty? (:subs cn)))
+        (delete (get (:tree node) k))))
+    (let [sid (:id sub)
+          pos -1]
+      (some
+        #(let [pos (inc pos)]
+           (when (= (:id %) sid)
+             (delete (get this_subs (:id %)))
+             (.splice node_subs pos 1)
+             true))
+        node_subs))))
 
-//////////////////////////////////////////////////////////////////////////////
-const _doPub = function(topic, node, tokens, pos, msg) {
-  if (! sjs.echt(node)) { return false; }
-  let rc=false;
-  if (pos < tokens.length) {
-    rc = rc || _doPub.call(this,topic, node.tree[ tokens[pos] ], tokens, pos+1, msg);
-    rc = rc || _doPub.call(this,topic, node.tree['*'], tokens, pos+1,msg);
-  } else {
-    rc = rc || _run.call(this,topic, node,msg);
-  }
-  return rc;
-}
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn _doPub "" [topic node tokens pos msg]
+  (if node (_doPub topic node tokens pos msg)))
 
-//////////////////////////////////////////////////////////////////////////////
-const _run = function(topic, node, msg) {
-  const cs= !!node ? node.subs : [];
-  let purge=false,
-  rc=false;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn _doPub "" [topic node tokens pos msg]
+  (let [rc false]
+    (if (< pos (count tokens))
+      (let [rc (or rc
+                   (_doPub this
+                           topic
+                           node.tree[ tokens[pos] ]
+                           tokens
+                           (inc pos) msg))
+            rc (or rc
+                   (_doPub this
+                           topic
+                           node.tree['*']
+                           tokens
+                           (inc pos) msg))]
+        rc)
+      (or rc
+          (_run this topic  node msg)))))
 
-  R.forEach( z => {
-    if (z.active &&
-        sjs.echt(z.action)) {
-      // pass along any extra parameters, if any.
-      z.action.apply(z.target, [msg,topic].concat(z.args));
-      // if once only, kill it.
-      if (!z.repeat) {
-        delete this.subs[z.id];
-        z.active= false;
-        z.action= null;
-        purge=true;
-      }
-      rc = true;
-    }
-  }, cs);
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn _run "" [topic node msg]
+  (let [cs (if node (:subs node) [])
+        purge false
+        rc false]
+    (doseq [z cs]
+      (when (and (:active? z)
+                 (:action z))
+        ;; pass along any extra parameters, if any.
+        ((:action z) (:target z)
+                     (concat [msg topic] z.args))
+        ;; if once only, kill it.
+        (when-not (:repeat? z)
+          (delete this.subs[z.id])
+          (set! (:active? z) false)
+          (set! (:action z) nil)
+          (set! purge true))
+        (set! rc true)))
+    ;; get rid of unwanted ones,
+    ;; and reassign new set to the node.
+    (if (and purge
+             (not-empty cs))
+      (set! node_subs
+            (filterv #(if (:action %) %) cs)))
+    rc))
 
-  // get rid of unwanted ones, and reassign new set to the node.
-  if (purge && cs.length > 0) {
-    node.subs= R.filter( z => {
-      return z.action ? true : false;
-    }, cs);
-  }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Subscribe to 1+ topics, returning a list of subscriber handles.
+;; topics => "/hello/*  /goodbye/*"
+;; @memberof module:cherimoia/ebus~RvBus
+;; @method once
+;; @param {String} topics - space separated if more than one.
+;; @param {Function} selector
+;; @param {Object} target
+;; @return {Array.String} - subscription ids
+(defn once "" [topics selector target & args]
+  (let [rc (apply _listen
+                  this
+                  false
+                  topics selector target args)]
+    (or rc [])))
 
-  return rc;
-}
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; subscribe to 1+ topics, returning a list of subscriber handles.
+;; topics => "/hello/*  /goodbye/*"
+;; @memberof module:cherimoia/ebus~RvBus
+;; @method on
+;; @param {String} topics - space separated if more than one.
+;; @param {Function} selector
+;; @param {Object} target
+;; @return {Array.String} - subscription ids.
+(defn on "" [topics selector target & args]
+  (or (apply _listen
+             this
+             true
+             topics
+             selector target args) []))
 
-//////////////////////////////////////////////////////////////////////////////
-/** @class RvBus */
-class RvBus extends sjs.ES6Claxx {
-  /**
-   * Subscribe to 1+ topics, returning a list of subscriber handles.
-   * topics => "/hello/*  /goodbye/*"
-   * @memberof module:cherimoia/ebus~RvBus
-   * @method once
-   * @param {String} topics - space separated if more than one.
-   * @param {Function} selector
-   * @param {Object} target
-   * @return {Array.String} - subscription ids
-   */
-  once(topics, selector, target /*, more args */) {
-    const rc= _listen.call(this,false, topics,
-                            selector, target,
-                            sjs.dropArgs(arguments,3));
-    return sjs.echt(rc) ? rc : [];
-  }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Trigger event on this topic.
+;; @memberof module:cherimoia/ebus~RvBus
+;; @method fire
+;; @param {String} topic
+;; @param {Object} msg
+;; @return {Boolean}
+(defn fire "" [topic msg]
+  (let [tokens (splitTopic topic)
+        rc false]
+    (if-not (empty? tokens)
+      (_doPub this topic
+                     this.root tokens 0
+                     (or msg {})))))
 
-  /**
-   * subscribe to 1+ topics, returning a list of subscriber handles.
-   * topics => "/hello/*  /goodbye/*"
-   * @memberof module:cherimoia/ebus~RvBus
-   * @method on
-   * @param {String} topics - space separated if more than one.
-   * @param {Function} selector
-   * @param {Object} target
-   * @return {Array.String} - subscription ids.
-   */
-  on(topics, selector, target /*, more args */) {
-    const rc= _listen.call(this,true, topics,
-                            selector, target,
-                            sjs.dropArgs(arguments,3));
-    return sjs.echt(rc) ? rc : [];
-  }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn splitTopic "" [topic]
+  (safeSplit topic "/"))
 
-  /**
-   * Trigger event on this topic.
-   * @memberof module:cherimoia/ebus~RvBus
-   * @method fire
-   * @param {String} topic
-   * @param {Object} msg
-   * @return {Boolean}
-   */
-  fire(topic, msg) {
-    let tokens= this.splitTopic(topic),
-    rc=false;
-    if (tokens.length > 0 ) {
-      rc= _doPub.call(this,topic,
-                       this.root, tokens, 0, msg || {} );
-    }
-    return rc;
-  }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Resume actions on this handle.
+;; @memberof module:cherimoia/ebus~RvBus
+;; @method resume
+;; @param {Object} - handler id
+(defn resume "" [handle]
+  (if-some [sub (get this_subs handle)]
+    (set! (:active? sub) true)))
 
-  /**
-   * @method splitTopic
-   * @protected
-   */
-  splitTopic(topic) {
-    return sjs.safeSplit(topic,'/');
-  }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Pause actions on this handle.
+;; @memberof module:cherimoia/ebus~RvBus
+;; @method pause
+;; @param {Object} - handler id
+(defn pause "" [handle]
+  (if-some [sub (get this_subs handle)]
+    (set! (:active? sub) false)))
 
-  /**
-   * Resume actions on this handle.
-   * @memberof module:cherimoia/ebus~RvBus
-   * @method resume
-   * @param {Object} - handler id
-   */
-  resume(handle) {
-    const sub= this.subs[handle];
-    if (!!sub) {
-      sub.active=true;
-    }
-  }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Stop actions on this handle.
+;; Unsubscribe.
+;; @memberof module:cherimoia/ebus~RvBus
+;; @method off
+;; @param {Object} - handler id
+(defn off "" [handle]
+  (if-some [sub (get this_subs handle)]
+    (_unSub this this.root
+            (splitTopic sub.topic) 0 sub)))
 
-  /**
-   * Pause actions on this handle.
-   * @memberof module:cherimoia/ebus~RvBus
-   * @method pause
-   * @param {Object} - handler id
-   */
-  pause(handle) {
-    const sub= this.subs[handle];
-    if (!!sub) {
-      sub.active=false;
-    }
-  }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn- iniz "" []
+  (set! this.root (mkTreeNode true))
+  (set! this.subs  {}))
 
-  /**
-   * Stop actions on this handle.
-   * Unsubscribe.
-   * @memberof module:cherimoia/ebus~RvBus
-   * @method off
-   * @param {Object} - handler id
-   */
-  off(handle) {
-    const sub= this.subs[handle];
-    if (!!sub) {
-      _unSub.call(this,this.root,
-                   this.splitTopic(sub.topic), 0, sub);
-    }
-  }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Remove all subscribers.
+(defn removeAll "" [] (iniz))
 
-  /**
-   * @method iniz
-   * @private
-   */
-  iniz() {
-    this.root= mkTreeNode(true);
-    this.subs = {};
-  }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Trigger event on this topic.
+;; @memberof module:cherimoia/ebus~EventBus
+;; @method fire
+;; @param {String} topic
+;; @param {Object} msg
+;; @return {Boolean}
+(defn fire "" [topic msg]
+  (_run this
+        topic
+        this.root.tree[topic] (or msg {})))
 
-  /**
-   * Remove all subscribers.
-   * @memberof module:cherimoia/ebus~RvBus
-   * @method removeAll
-   */
-  removeAll() {
-    this.iniz();
-  }
-
-  /**
-   * @method constructor
-   * @private
-   */
-  constructor() {
-    super();
-    this.iniz();
-  }
-
-};
-//////////////////////////////////////////////////////////////////////////////
-/**
- * @class EventBus
- */
-class EventBus extends RvBus {
-  /**
-   * Trigger event on this topic.
-   * @memberof module:cherimoia/ebus~EventBus
-   * @method fire
-   * @param {String} topic
-   * @param {Object} msg
-   * @return {Boolean}
-   */
-  fire(topic, msg) {
-    return _run.call(this, topic,
-                     this.root.tree[topic], msg || {});
-  }
-
-  /**
-   * @method splitTopic
-   * @protected
-   */
-  splitTopic(topic) { return [topic]; }
-
-  /**
-   * @method constructor
-   * @private
-   */
-  constructor() {
-    super();
-  }
-}
-
-/** @alias module:cherimoia/ebus */
-const xbox= /** @lends xbox# */{
-  /**
-   * @method reifyRvBus
-   * @return {RvBus}
-   */
-  reifyRvBus() {
-    return new RvBus();
-  },
-  /**
-   * @method reify
-   * @return {EventBus}
-   */
-  reify() {
-    return new EventBus();
-  },
-  /**
-   * @property {EventBus} EventBus
-   */
-  EventBus: EventBus,
-  /**
-   * @property {RvBus} RvBus
-   */
-  RvBus: RvBus
-};
-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn splitTopic "" [topic] (doto [topic]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;EOF
