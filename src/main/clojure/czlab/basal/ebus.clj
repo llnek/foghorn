@@ -11,28 +11,41 @@
 
   czlab.basal.ebus
 
-  (:require [czlab.basal.log :as log]
-            [clojure.java.io :as io]
-            [clojure.string :as cs]
-            [czlab.basal.meta :as m]
-            [czlab.basal.core :as c]
-            [czlab.basal.str :as s])
-
-  (:import [java.io File]))
+  (:require [clojure.string :as cs]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;(set! *warn-on-reflection* true)
 
+(def ^:private _SEED (atom 1))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn- mkSubSCR "" [topic selector context repeat? args]
-  (doto {:target context
-         :id "sub#" + Number(++_SEED)
-         :repeat? repeat?
-         :args (or args [])
-         :action selector
-         :topic topic
-         :active? true}))
+(defn- splitTopic "" [topic] (if (and (string? topic)
+                                      (not-empty topic))
+                               (cs/split topic #"/")))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn- nextSEQ "" [] (let [n @_SEED] (swap! _SEED inc) n))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defprotocol EventBus
+  ""
+  ())
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn- mkSubSCR
+  "" [topic repeat? listener & args]
+  {:pre [(fn? listener)]}
+  (atom
+    {:id (keyword (str "s#" (nextSEQ)))
+     :repeat? repeat?
+     :action listener
+     :topic topic
+     :args args
+     :active? true}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
@@ -43,19 +56,18 @@
      ;; children - branches
      ;; subscribers
      {:tree {}}
-     {:tree {} :subs []})))
+     {:tree {} :subs {}})))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; for each topic, subscribe to it.
+(defn- listen "" [repeat? topics listener more]
+  (->> (cs/split (or topics "") #"\s+")
+       (map #(addSub repeat? % listener more))
+       (filterv #(if (> (count %) 0) %))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn _listen "" [repeat? topics selector target more]
-  ;; for each topic, subscribe to it.
-  (let [ts (cs/split topics #"\s+")
-        rc (map #(_addSub repeat? % selector target more) ts)]
-    (filterv #(> (count %) 0) rc)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-(defn _doSub "" [node token]
+(defn- doSub "" [node token]
   (if-not (contains? (:tree node) token)
     (update-in node
                [:tree]
@@ -153,103 +165,60 @@
             (filterv #(if (:action %) %) cs)))
     rc))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-;; Subscribe to 1+ topics, returning a list of subscriber handles.
-;; topics => "/hello/*  /goodbye/*"
-;; @memberof module:cherimoia/ebus~RvBus
-;; @method once
-;; @param {String} topics - space separated if more than one.
-;; @param {Function} selector
-;; @param {Object} target
-;; @return {Array.String} - subscription ids
-(defn once "" [topics selector target & args]
-  (let [rc (apply _listen
-                  this
-                  false
-                  topics selector target args)]
-    (or rc [])))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-;; subscribe to 1+ topics, returning a list of subscriber handles.
-;; topics => "/hello/*  /goodbye/*"
-;; @memberof module:cherimoia/ebus~RvBus
-;; @method on
-;; @param {String} topics - space separated if more than one.
-;; @param {Function} selector
-;; @param {Object} target
-;; @return {Array.String} - subscription ids.
-(defn on "" [topics selector target & args]
-  (or (apply _listen
-             this
-             true
-             topics
-             selector target args) []))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-;; Trigger event on this topic.
-;; @memberof module:cherimoia/ebus~RvBus
-;; @method fire
-;; @param {String} topic
-;; @param {Object} msg
-;; @return {Boolean}
-(defn fire "" [topic msg]
-  (let [tokens (splitTopic topic)
-        rc false]
-    (if-not (empty? tokens)
-      (_doPub this topic
-                     this.root tokens 0
-                     (or msg {})))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-(defn splitTopic "" [topic]
-  (safeSplit topic "/"))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-;; Resume actions on this handle.
-;; @memberof module:cherimoia/ebus~RvBus
-;; @method resume
-;; @param {Object} - handler id
-(defn resume "" [handle]
-  (if-some [sub (get this_subs handle)]
-    (set! (:active? sub) true)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-;; Pause actions on this handle.
-;; @memberof module:cherimoia/ebus~RvBus
-;; @method pause
-;; @param {Object} - handler id
-(defn pause "" [handle]
-  (if-some [sub (get this_subs handle)]
-    (set! (:active? sub) false)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-;; Stop actions on this handle.
-;; Unsubscribe.
-;; @memberof module:cherimoia/ebus~RvBus
-;; @method off
-;; @param {Object} - handler id
-(defn off "" [handle]
-  (if-some [sub (get this_subs handle)]
-    (_unSub this this.root
-            (splitTopic sub.topic) 0 sub)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
 (defn- iniz "" []
   (set! this.root (mkTreeNode true))
   (set! this.subs  {}))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Remove all subscribers.
-(defn removeAll "" [] (iniz))
-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn eventBus<> "" [state]
+  (let []
+    (reify EventBus
+      ;; Subscribe to 1+ topics, returning a list of subscriber handles.
+      ;; topics => "/hello/*  /goodbye/*"
+      ;; @param {String} topics - space separated if more than one.
+      ;; @return {Array.String} - subscription ids
+      (once [_ topics listener & args]
+        (or (apply _listen state false topics listener args) []))
+      ;; subscribe to 1+ topics, returning a list of subscriber handles.
+      ;; topics => "/hello/*  /goodbye/*"
+      ;; @param {String} topics - space separated if more than one.
+      ;; @param {Function} selector
+      ;; @return {Array.String} - subscription ids.
+      (on [_ topics selector & args]
+        (or (apply _listen state true topics selector args) []))
+      ;; Trigger event on this topic.
+      ;; @param {String} topic
+      ;; @param {Object} msg
+      ;; @return {Boolean}
+      (fire [_ topic msg]
+        (let [tokens (splitTopic topic)]
+          (if-not (empty? tokens)
+            (_doPub state topic tokens 0 (or msg {})))))
+      ;; Resume actions on this handle.
+      ;; @memberof module:cherimoia/ebus~RvBus
+      ;; @method resume
+      ;; @param {Object} - handler id
+      (resume [_ handle]
+        (if-some [sub (get (:subs @state) handle)]
+          (swap! sub
+                 assoc :active? true)))
+      ;; Pause actions on this handle.
+      ;; @memberof module:cherimoia/ebus~RvBus
+      ;; @method pause
+      ;; @param {Object} - handler id
+      (pause [_ handle]
+        (if-some [sub (get (:subs @state) handle)]
+          (swap! sub
+                 assoc :active? false)))
+      ;; Stop actions on this handle.
+      ;; @memberof module:cherimoia/ebus~RvBus
+      ;; @method off
+      ;; @param {Object} - handler id
+      (off [_ handle]
+        (if-some [sub (get (:subs @state) handle)]
+          (_unSub state (splitTopic (:topic @sub)) 0 sub)))
+      ;; Remove all subscribers.
+      (removeAll [_] (iniz state))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 ;; Trigger event on this topic.
@@ -266,6 +235,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 (defn splitTopic "" [topic] (doto [topic]))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;EOF
