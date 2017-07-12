@@ -22,7 +22,9 @@
 ;;
 (defn- splitTopic "" [topic] (if (and (string? topic)
                                       (not-empty topic))
-                               (cs/split topic #"/")))
+                               (->> (cs/split topic #"/")
+                                    (filterv #(if (> (count %) 0) %)))
+                               []))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
@@ -37,205 +39,155 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 (defn- mkSubSCR
-  "" [topic repeat? listener & args]
+  "" [topic repeat? listener args]
   {:pre [(fn? listener)]}
-  (atom
-    {:id (keyword (str "s#" (nextSEQ)))
-     :repeat? repeat?
-     :action listener
-     :topic topic
-     :args args
-     :active? true}))
+  {:id (keyword (str "s#" (nextSEQ)))
+   :repeat? repeat?
+   :action listener
+   :topic topic
+   :args args
+   :status (long-array 1 1)})
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; nodes - children
+;; subscribers
+(defn- mkTreeNode "" [] {:nodes {} :subcs {}})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn- mkTreeNode ""
-  ([] (mkTreeNode nil))
-  ([root?]
-   (if root?
-     ;; children - branches
-     ;; subscribers
-     {:tree {}}
-     {:tree {} :subs {}})))
+(defn- addOneSub "" [node sub]
+  (update-in node [:subcs] assoc (:id sub) sub))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn- remOneSub "" [node sub]
+  (update-in node [:subcs] dissoc (:id sub)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn- addOneTopic "" [top {:keys [topic] :as sub}]
+  (let [path (splitTopic topic)]
+    (-> (update-in top path addOneSub sub)
+        (update-in [:subcs] assoc (:id sub) sub))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn- addTopic "" [root sub] (swap! root addOneTopic sub))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; for each topic, subscribe to it.
-(defn- listen "" [repeat? topics listener more]
-  (->> (cs/split (or topics "") #"\s+")
-       (map #(addSub repeat? % listener more))
-       (filterv #(if (> (count %) 0) %))))
+(defn- listen "" [root repeat? topics listener more]
+  (->> (-> (or topics "") cs/trim (cs/split #"\s+"))
+       (filter #(if (> (count %) 0) %))
+       (mapv #(addTopic root
+                        (mkSubSCR % repeat? listener more)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn- doSub "" [node token]
-  (if-not (contains? (:tree node) token)
-    (update-in node
-               [:tree]
-               assoc token (mkTreeNode)))
-  (get (:tree node) token))
+(defn- delOneTopic "" [top {:keys [topic] :as sub}]
+  (let [path (splitTopic topic)]
+    (-> (update-in top path remOneSub sub)
+        (update-in [:subcs] dissoc (:id sub)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn _addSub "" [repeat? topic selector target more]
-  (let [tkns (splitTopic topic)]
-    (when-not (empty? tkns)
-      (let [rc (mkSubSCR topic selector target repeat? more)
-            node (reduce #(_doSub %1 %2) this_root tkns)]
-        (update-in this_subs
-                   assoc (:id rc) rc)
-        (update-in node
-                   [:subs] conj rc)
-        (:id rc)))))
+(defn- unSub "" [root sub] (swap! root delOneTopic sub))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn _unSub "" [node tokens pos sub]
-  (if node (_unSub node tokens pos sub)))
+(defn- doPub "" [branch pathTokens topic msg]
+  (let [{:keys [nodes subcs]} branch
+        [p & more] pathTokens
+        cur (get nodes p)
+        s1 (get nodes "*")
+        s1c (:nodes s1)
+        s2 (get nodes "**")]
+    (if s2
+      (run s2 topic msg))
+    (if s1
+      (cond
+        (and (empty? more)
+             (empty? s1c))
+        (run s1 topic msg)
+        (or (and (empty? s1c)
+                 (not-empty more))
+            (and (empty? more)
+                 (not-empty s1c)))
+        nil
+        :else
+        (doPub s1 more topic msg)))
+    (if cur
+      (if (not-empty more)
+        (doPub cur more topic msg)
+        (run cur topic msg)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn _unSub "" [node tokens pos sub]
-  (if (< pos (count tokens))
-    (let [k (aget tokens pos)
-          cn (get (:tree node) k)
-          _ (_unSub this cn tokens (inc pos) sub)]
-      (if (and (empty? (:tree cn))
-               (empty? (:subs cn)))
-        (delete (get (:tree node) k))))
-    (let [sid (:id sub)
-          pos -1]
-      (some
-        #(let [pos (inc pos)]
-           (when (= (:id %) sid)
-             (delete (get this_subs (:id %)))
-             (.splice node_subs pos 1)
-             true))
-        node_subs))))
+(defn- run "" [{:keys [subcs]} topic msg]
+  (doseq [z subcs
+          :let [{:keys [repeat? action status extraArgs]} z]
+          :when (pos? (aget ^longs status 0))]
+    (apply action (concat [topic msg] extraArgs))
+    ;;if one time only, turn off flag
+    (if-not repeat?
+      (aset ^longs status 0 -1))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-(defn _doPub "" [topic node tokens pos msg]
-  (if node (_doPub topic node tokens pos msg)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-(defn _doPub "" [topic node tokens pos msg]
-  (let [rc false]
-    (if (< pos (count tokens))
-      (let [rc (or rc
-                   (_doPub this
-                           topic
-                           node.tree[ tokens[pos] ]
-                           tokens
-                           (inc pos) msg))
-            rc (or rc
-                   (_doPub this
-                           topic
-                           node.tree['*']
-                           tokens
-                           (inc pos) msg))]
-        rc)
-      (or rc
-          (_run this topic  node msg)))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-(defn _run "" [topic node msg]
-  (let [cs (if node (:subs node) [])
-        purge false
-        rc false]
-    (doseq [z cs]
-      (when (and (:active? z)
-                 (:action z))
-        ;; pass along any extra parameters, if any.
-        ((:action z) (:target z)
-                     (concat [msg topic] z.args))
-        ;; if once only, kill it.
-        (when-not (:repeat? z)
-          (delete this.subs[z.id])
-          (set! (:active? z) false)
-          (set! (:action z) nil)
-          (set! purge true))
-        (set! rc true)))
-    ;; get rid of unwanted ones,
-    ;; and reassign new set to the node.
-    (if (and purge
-             (not-empty cs))
-      (set! node_subs
-            (filterv #(if (:action %) %) cs)))
-    rc))
-
-(defn- iniz "" []
-  (set! this.root (mkTreeNode true))
-  (set! this.subs  {}))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn eventBus<> "" [state]
-  (let []
+(defn eventBus<> "" []
+  (let [state (atom (mkTreeNode))]
     (reify EventBus
       ;; Subscribe to 1+ topics, returning a list of subscriber handles.
       ;; topics => "/hello/*  /goodbye/*"
       ;; @param {String} topics - space separated if more than one.
       ;; @return {Array.String} - subscription ids
       (once [_ topics listener & args]
-        (or (apply _listen state false topics listener args) []))
+        (or (listen state false topics listener args) []))
       ;; subscribe to 1+ topics, returning a list of subscriber handles.
       ;; topics => "/hello/*  /goodbye/*"
       ;; @param {String} topics - space separated if more than one.
       ;; @param {Function} selector
       ;; @return {Array.String} - subscription ids.
-      (on [_ topics selector & args]
-        (or (apply _listen state true topics selector args) []))
+      (on [_ topics listener & args]
+        (or (listen state true topics listener args) []))
       ;; Trigger event on this topic.
       ;; @param {String} topic
       ;; @param {Object} msg
       ;; @return {Boolean}
       (fire [_ topic msg]
         (let [tokens (splitTopic topic)]
-          (if-not (empty? tokens)
-            (_doPub state topic tokens 0 (or msg {})))))
+          (if (not-empty tokens)
+            (doPub @state tokens topic msg))))
       ;; Resume actions on this handle.
       ;; @memberof module:cherimoia/ebus~RvBus
       ;; @method resume
       ;; @param {Object} - handler id
       (resume [_ handle]
-        (if-some [sub (get (:subs @state) handle)]
-          (swap! sub
-                 assoc :active? true)))
+        (let [sub (get (:subcs @state) handle)
+              r? (true? (:repeat? sub))
+              st (if sub (:status sub))
+              sv (if st (aget ^longs st 0) -911)]
+          (if (= 0 sv)
+            (aset ^longs st 0 1))))
       ;; Pause actions on this handle.
       ;; @memberof module:cherimoia/ebus~RvBus
       ;; @method pause
       ;; @param {Object} - handler id
       (pause [_ handle]
-        (if-some [sub (get (:subs @state) handle)]
-          (swap! sub
-                 assoc :active? false)))
+        (let [sub (get (:subcs @state) handle)
+              st (if sub (:status sub))
+              sv (if st (aget ^longs st 0) -911)]
+          (if (pos? sv)
+            (aset ^longs st 0 0))))
       ;; Stop actions on this handle.
       ;; @memberof module:cherimoia/ebus~RvBus
       ;; @method off
       ;; @param {Object} - handler id
       (off [_ handle]
-        (if-some [sub (get (:subs @state) handle)]
-          (_unSub state (splitTopic (:topic @sub)) 0 sub)))
+        (if-some [sub (get (:subcs @state) handle)]
+          (unSub state sub)))
       ;; Remove all subscribers.
-      (removeAll [_] (iniz state))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-;; Trigger event on this topic.
-;; @memberof module:cherimoia/ebus~EventBus
-;; @method fire
-;; @param {String} topic
-;; @param {Object} msg
-;; @return {Boolean}
-(defn fire "" [topic msg]
-  (_run this
-        topic
-        this.root.tree[topic] (or msg {})))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;
-(defn splitTopic "" [topic] (doto [topic]))
-
+      (removeAll [_] (reset! state (mkTreeNode))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;EOF
