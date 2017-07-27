@@ -10,10 +10,15 @@
       :author "Kenneth Leung"}
 
     czlab.foghorn.asterix
-  ;(:require-macros [clojure.core :refer :all])
+  (:require-macros
+    [czlab.foghorn.macros :refer [now-millis]])
   (:require [czlab.foghorn.l10n :as lz]
             [clojure.string :as cs]
             [czlab.foghorn.log :as log]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(def ^:dynamic *config* (atom {}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
@@ -132,13 +137,182 @@
 (defn getLevelCfg "" [cfgObj level]
   (get-in cfgObj [:levels (str level) "cfg"]))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 (defn intersect? "" [a1 a2]
   (not (or (> (:left a1) (:right a2))
            (> (:left a2) (:right a1))
            (< (:top a1) (:bottom a2))
            (< (:top a2) (:bottom a1)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn outOfBound? "" [a B]
+  (if (and a B)
+      (or (> (:left a) (:right B))
+          (< (:top a) (:bottom B))
+          (< (:right a) (:left B))
+          (> (:bottom a) (:top B)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn degToRad "" [deg]
+  (/ (* deg (.-PI js/Math)) 180))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn radToDeg "" [rad]
+  (/ (* 180 rad) (.-PI js/Math)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn calcXY
+  "quadrants =  2 | 1
+               --------
+                3 | 4"
+  [angle hypot]
+  (let [angle (mod angle 360)
+        m js/Math
+        [x y q]
+        (cond
+          (and (>= angle 0) (<= angle 90))
+          (let [t (degToRad (- 90 angle))]
+            [(.cos m t) (.sin m t) 1])
+          (and (>= angle 90) (<= angle 180 ))
+          (let [t (degToRad (- angle 90))]
+            [(.cos m t) (- (.sin m t)) 2])
+          (and (>= angle 180) (<= angle 270))
+          (let [t (degToRad (- 270 angle))]
+            [(- (.cos m t)) (- (.sin m t)) 3])
+          (and (>= angle 270) (<= angle 360))
+          (let [t (degToRad (- angle 270))]
+            [(- (.cos m t) (.sin m t) 4)]))]
+    [(* x hypot) (* y hypot) q]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn normalizeDeg "" [deg] (mod deg 360))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn getSfx "" [x])
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn toggleSfx! ""
+  ([] (toggleSfx! nil))
+  ([value]
+   (let [cv (get-in @*config* [:sound :open?])
+         cv (or value (not cv))]
+     (swap! *config*
+            update-in [:sound] assoc :open cv))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn sfxMusicVol "" [vol]
+  (if (and (number? vol)
+           (get-in @*config*
+                   [:sound :open?]))
+    (-> js/cc
+        (.-audioEngine)
+        (.setMusicVolume vol))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn sfxPlayMusic "" [kee args]
+  (when (get-in @*config*
+                [:sound :open?])
+    (sfxMusicVol (:volume args))
+    (-> js/cc
+        (.-audioEngine)
+        (.playMusic (getSfx kee)
+                    (true? (:repeat? args))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn sfxPlay "" [kee args]
+  (when (get-in @*config*
+                [:sound :open?])
+    (sfxMusicVol (:volume args))
+    (-> js/cc
+        (.-audioEngine)
+        (.playEffect (getSfx kee)
+                     (true? (:repeat? args))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn sfxCancel "" []
+  (doto (.-audioEngine js/cc) (.stopAllEffects) (.stopMusic)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn sfxInit "" []
+  (swap! *config* update-in [:sound] assoc :open? true)
+  (sfxMusicVol (get-in @*config* [:sound :volume])))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn sanitizeUrlForDevice "" [url] )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn sanitizeUrlForWeb "" [url] )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn sanitizeUrl "" [url]
+  (.log js/cc (str "About to sanitize url: " url))
+  (let [rc
+        (if (-> js/cc (.-sys) (.isNative))
+          (sanitizeUrlForDevice url)
+          (sanitizeUrlForWeb url))]
+    (.log js/cc (str "Sanitize url: " rc))
+    rc))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn throttle "" [func waitMillis options]
+  (let
+    [trailing? (not (false? (:trailing? options)))
+     notleading? (false? (:leading? options))
+     tout (atom 0)
+     prev (atom 0)
+     res (atom nil)
+     ctx (atom nil)
+     args (atom [])
+     later
+     (fn []
+       (reset! prev
+               (if notleading? 0 (now-millis)))
+       (reset! tout 0)
+       (reset! res (apply func @ctx @args))
+       (when (= 0 @tout)
+         (reset! ctx nil)
+         (reset! args [])))]
+    (fn [& xs]
+      (let
+        [now (now-millis)
+         _ (if (and (= 0 @prev)
+                    notleading?)
+             (reset! prev now))
+         remain (- waitMillis (- now @prev))]
+        (reset! args xs)
+        (reset! ctx (first xs))
+        (cond
+          (or (<= remain 0)
+              (> remain waitMillis))
+          (do
+            (js/clearTimeout @tout)
+            (reset! tout 0)
+            (reset! prev now)
+            (reset! res (apply func @ctx @args))
+            (when (= 0 @tout)
+              (reset! ctx nil)
+              (reset! args [])))
+          (and (= 0 @tout) trailing?)
+          (reset! tout
+                  (js/setTimeout later remain)))
+        @res))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;EOF
