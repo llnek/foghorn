@@ -11,7 +11,9 @@
 
     czlab.foghorn.asterix
   ;(:require-macros [clojure.core :refer :all])
-  (:require [clojure.string :as cs]))
+  (:require [czlab.foghorn.l10n :as lz]
+            [clojure.string :as cs]
+            [czlab.foghorn.log :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
@@ -106,10 +108,37 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 (defn l10nInit "" [table]
-  (.toLocaleString js/LZString table)
-  (set! .-locale js/LZString cc.sys.language)
-  (set! .-defaultLocale js/LZString "en"))
+  (lz/setLocale! (-> js/cc (.-sys) (.-language)))
+  (lz/setLocales table)
+  (log/info "Loaded l10n strings.  locale = " lz/*current-locale*))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn l10n "" [s & pms]
+  (let [t (lz/localize s)]
+    (if (not-empty pms)
+      (.render js/Mustache t (clj->js pms)) t)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn fire! "" [topic msg]
+  (some-> (-> js/cc
+              (.-director)
+              (.getRunningScene))
+          (.-ebus) (.fire topic (clj->js (or msg {})))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn getLevelCfg "" [cfgObj level]
+  (get-in cfgObj [:levels (str level) "cfg"]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn intersect? "" [a1 a2]
+  (not (or (> (:left a1) (:right a2))
+           (> (:left a2) (:right a1))
+           (< (:top a1) (:bottom a2))
+           (< (:top a2) (:bottom a1)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;EOF
