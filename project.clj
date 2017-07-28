@@ -21,6 +21,7 @@
   :cljsbuild {:builds {:dev {:source-paths ["src/main/cljs"]
                              :compiler {:output-to "public/js/main.js"
                                         :optimizations :whitespace
+                                        :infer-externs true
                                         :pretty-print true}}}}
 
   :clean-targets ^{:protect false} [:target-path "public/js"])
