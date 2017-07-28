@@ -373,25 +373,35 @@
           (clj->js
             {:onKeyPressed (fn [kee e] (aset kb kee true))
              :onKeyReleased (fn [kee e] (aset kb kee false))
-             :event js/cc.EventListener.KEYBOARD })
+             :event js/cc.EventListener.KEYBOARD})
           @*main*))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn- keyListener<> "" [bus]
+  (clj->js
+    {:onKeyPressed
+     (fn [kee e]
+       (.fire bus
+              "/key/down"
+              {:group :key
+               :key kee
+               :event e}))
+     :onKeyReleased
+     (fn [kee e]
+       (.fire bus
+              "/key/up"
+              {:group :key
+               :key kee
+               :event e}))
+     :event js/cc.EventListener.KEYBOARD}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 (defn onKeys "" [bus]
   (when (hasKeyPad?)
     (-> (cc-evtMgr)
-        (.addListener
-          (clj->js
-            {:onKeyPressed
-             (fn [kee e]
-               (.fire bus
-                      "/key/down" {:group :key :key kee :event e}))
-             :onKeyReleased
-             (fn [kee e]
-               (.fire bus "/key/up" {:group :key :key kee :event e}))
-             :event js/cc.EventListener.KEYBOARD})
-          @*main*))))
+        (.addListener (keyListener<> bus) @*main*))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
@@ -401,37 +411,40 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
+(defn- mouseListener<> "" [bus]
+  (clj->js
+    {:onMouseMove
+     (fn [e]
+       (if (= (.getButton e)
+              js/cc.EventMouse.BUTTON_LEFT)
+         (.fire bus
+                "/mouse/move"
+                {:group :mouse
+                 :loc (.getLocation e)
+                 :delta (.getDelta e)
+                 :event e})))
+     :onMouseDown
+     (fn [e]
+       (.fire bus
+              "/mouse/down"
+              {:group :mouse
+               :loc (.getLocation e)
+               :event e}))
+     :onMouseUp
+     (fn [e]
+       (.fire bus
+              "/mouse/up"
+              {:group :mouse
+               :loc (.getLocation e)
+               :event e}))
+     :event js/cc.EventListener.MOUSE}))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
 (defn onMouse "" [bus]
   (when (hasMouse?)
     (-> (cc-evtMgr)
-        (.addListener
-          (clj->js
-            {:onMouseMove
-             (fn [e]
-               (if (= (.getButton e)
-                      (js/cc.EventMouse.BUTTON_LEFT))
-                 (.fire bus
-                        "/mouse/move"
-                        {:group :mouse
-                         :loc (.getLocation e)
-                         :delta (.getDelta e)
-                         :event e})))
-             :onMouseDown
-             (fn [e]
-               (.fire bus
-                      "/mouse/down"
-                      {:group :mouse
-                       :loc (.getLocation e)
-                       :event e}))
-             :onMouseUp
-             (fn [e]
-               (.fire bus
-                      "/mouse/up"
-                      {:group :mouse
-                       :loc (.getLocation e)
-                       :event e}))
-             :event js/cc.EventListener.MOUSE})
-          @*main*))))
+        (.addListener (mouseListener<> bus) @*main*))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
@@ -456,8 +469,8 @@
      :onTouchesMoved
      (fn [ts e]
        (let [id (.id (aget ts 0))]
-         (if (not= id (.-prevTouchId this))
-           (set! (.-prevTouchId this) id)
+         (if (not= id (.-prevTouchId (js* "this")))
+           (set! (.-prevTouchId (js* "this")) id)
            (.fire bus
                   "/touch/all/move"
                   {:group :touch
@@ -592,131 +605,113 @@
       (.addChild menu mi))
     menu)))
 
-  /**
-   * Make a text label menu containing one single button.
-   * @method
-   * @param {Object} options
-   * @return {cc.Menu}
-   */
-  tmenu1(options) {
-    let menu = this.tmenu(options);
-    if (options.anchor) { menu.setAnchorPoint(options.anchor); }
-    if (options.pos) { menu.setPosition(options.pos); }
-    if (options.visible === false) { menu.setVisible(false); }
-    menu.alignItemsVertically();
-    return menu;
-  },
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn tmenu1
+  "Make a text label menu containing one single button."
+  [options]
+  (let [menu (tmenu options)]
+    (if (:anchor options)
+      (.setAnchorPoint menu (:anchor options)))
+    (if (:pos options)
+      (.setPosition menu (:pos options)))
+    (if (false? (:visible? options))
+      (.setVisible menu false))
+    (doto menu
+      (.alignItemsVertically ))))
 
-  /**
-   * Create a vertically aligned menu with graphic buttons.
-   * @method
-   * @param {Array} items
-   * @param {Object} options
-   * @return {cc.Menu}
-   */
-  vmenu(items, options) {
-    const hint=options || {},
-    m= this.pmenu(true,
-                  items,
-                  hint.scale,
-                  hint.padding);
-    if (!!hint.pos) {
-      m.setPosition(hint.pos);
-    }
-    return m;
-  },
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn pmenu
+  "Create a menu with graphic buttons."
+  ([vertical? items] (pmenu vertical? items nil 10))
+  ([vertical? items scale padding]
+  (let [menu (js/cc.Menu.)
+        t (atom 1)]
+    (doseq [obj items
+            :let [{:keys [nnn color]} obj
+                  mi (js/cc.MenuItemSprite.
+                       (js/cc.Sprite. nnn)
+                       (js/cc.Sprite. (or (:sss obj) nnn))
+                       (js/cc.Sprite. (or (:ddd obj) nnn))
+                       (:func obj)
+                       (:target obj))]]
+      (if (number? color) (.setColor mi color))
+      (if (number? scale) (.setScale mi scale))
+      (.setTag mi @t)
+      (swap! t inc)
+      (.addChild menu mi))
+    (if vertical?
+      (.alignItemsVerticallyWithPadding menu padding)
+      (.alignItemsHorizontallyWithPadding menu padding))
+    menu)))
 
-  /**
-   * Create a horizontally aligned menu with graphic buttons.
-   * @method
-   * @param {Array} items
-   * @param {Object} options
-   * @return {cc.Menu}
-   */
-  hmenu(items, options) {
-    const hint= options || {},
-    m= this.pmenu(false,
-                  items,
-                  hint.scale,
-                  hint.padding);
-    if (!!hint.pos) {
-      m.setPosition(hint.pos);
-    }
-    return m;
-  },
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn pmenu1
+  "Create a single button menu."
+  [options]
+  (let [{:keys [anchor
+                pos visible?]}
+        options
+        menu (pmenu true [options])]
+    (if anchor (.setAnchorPoint menu anchor))
+    (if pos (.setPosition menu pos))
+    (if (false? visible?)
+      (.setVisible menu false))
+    menu))
 
-  /**
-   * Create a menu with graphic buttons.
-   * @method
-   * @param {Boolean} vertical
-   * @param {Array} items
-   * @param {Number} scale
-   * @param {Number} padding
-   * @return {cc.Menu}
-   */
-  pmenu(vertical, items, scale, padding) {
-    let menu = new cc.Menu(),
-    obj,
-    mi,
-    t=0;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn vmenu
+  "Create a vertically aligned menu with graphic buttons."
+  [items options]
+  (let [m (pmenu true
+                 items
+                 (:scale options)
+                 (:padding options))]
+    (if-some [p (:pos options)]
+      (.setPosition m p))
+    m))
 
-    for (let n=0; n < items.length; ++n) {
-      obj=items[n];
-      mi= new cc.MenuItemSprite(new cc.Sprite(obj.nnn),
-                                new cc.Sprite(obj.sss || obj.nnn),
-                                new cc.Sprite(obj.ddd || obj.nnn),
-                                obj.selector || obj.cb,
-                                obj.target);
-      if (!!obj.color) { mi.setColor(obj.color); }
-      if (!!scale) { mi.setScale(scale); }
-      mi.setTag(++t);
-      menu.addChild(mi);
-    }
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn hmenu
+  "Create a horizontally aligned menu with graphic buttons."
+  [items options]
+  (let [m (pmenu false
+                 items
+                 (:scale options)
+                 (:padding options))]
+    (if-some [p (:pos options)]
+      (.setPosition m (:pos options)))
+    m))
 
-    padding = padding || 10;
-    if (!vertical) {
-      menu.alignItemsHorizontallyWithPadding(padding);
-    } else {
-      menu.alignItemsVerticallyWithPadding(padding);
-    }
-
-    return menu;
-  },
-
-  /**
-   * Create a single button menu.
-   * @method
-   * @param {Object} options
-   * @return {cc.Menu}
-   */
-  pmenu1(options) {
-    const menu = this.pmenu(true, [options]);
-    if (options.anchor) { menu.setAnchorPoint(options.anchor); }
-    if (options.pos) { menu.setPosition(options.pos); }
-    if (options.visible === false) { menu.setVisible(false); }
-    return menu;
-  },
-
-  /**
-   * Create a Label.
-   * @method
-   * @param {Object} options
-   * @return {cc.LabelBMFont}
-   */
-  bmfLabel(options) {
-    let f= new cc.LabelBMFont(options.text, options.fontPath);
-    if (options.color) { f.setColor(options.color); }
-    if (options.pos) { f.setPosition(options.pos); }
-    if (options.anchor) { f.setAnchorPoint(options.anchor); }
-    if (options.visible === false) { f.setVisible(false); }
-    f.setScale( options.scale || 1);
-    f.setOpacity(0.9*255);
-    return f;
-  }
-
-};
-
-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+(defn bmfLabel
+  "Create a Label."
+  [options]
+  (let [{:keys [scale
+                color
+                pos
+                anchor
+                visible?]}
+        options
+        f (js/cc.LabelBMFont. (:text options)
+                              (:fontPath options))]
+    (if (number? color)
+      (.setColor f color))
+    (if pos
+      (.setPosition f pos))
+    (if anchor
+      (.setAnchorPoint f anchor))
+    (if (false? visible?)
+      (.setVisible f false))
+    (if (number? scale)
+      (.setScale f scale))
+    (.setOpacity f (* 255 0.9))
+    f))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
