@@ -90,82 +90,15 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn- pvLoadLevels "" [cfg]
-  (let
-    [rc (atom [])
-     f1 (fn [k]
-          (fn [v n]
-            (let [a (reduce
-                      #(let [[_ item] %2
-                             z (cs/join "." [k n _])]
-                         (case n
-                           "sprites"
-                           (do
-                             (conj %1 (pvLoadSprite cfg z item))
-                             (aset (.-sprites (:assets cfg)) z item))
-                           "images"
-                           (do
-                             (conj %1 (pvLoadImage cfg z item))
-                             (aset (.-images (:assets cfg)) z item))
-                           "tiles"
-                           (do
-                             (conj %1 (pvLoadTile cfg z item))
-                             (aset (.-tiles (:assets cfg)) z item))
-                           %1))
-                      []
-                      v)]
-              (swap! rc conj a))))]
-    (doseq [[k v] (:levels cfg)]
-      (doseq [[a b] v]
-        ((f1 k) a b)))
-    @rc))
+(defn- pvLoadLevels "" [cfg])
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
-(defn- pvGatherPreloads "" [cfg]
-  (let [{:keys [assets]} cfg
-        rc [
-    R.values(R.mapObjIndexed((v,k) => {
-      return pvLoadSprite(sh,xcfg,k,v);
-    }, assets.sprites)),
+(defn- pvGatherPreloads "" [cfg])
 
-    R.values(R.mapObjIndexed((v,k) => {
-      return pvLoadImage(sh,xcfg,k,v);
-    }, assets.images)),
-
-    R.values(R.mapObjIndexed((v,k) => {
-      return pvLoadSound(sh,xcfg,k,v);
-    }, assets.sounds)),
-
-    sjs.reduceObj((memo, v,k) => {
-      // value is array of [ path, image , xml ]
-      p= sh.sanitizeUrl(v[0]);
-      return memo.concat([p+'/'+v[1], p+'/'+v[2]]);
-    }, [], assets.fonts),
-
-    sjs.reduceObj((memo, v,k) => {
-      return memo.concat( pvLoadAtlas(sh, xcfg, k,v));
-    }, [], assets.atlases),
-
-    R.values(R.mapObjIndexed((v,k) => {
-      return pvLoadTile(sh, xcfg, k,v);
-    }, assets.tiles)),
-
-    xcfg.game.preloadLevels ? pvLoadLevels(sjs, sh, xcfg) : []
-  ];
-
-  return R.reduce((memo,v) => {
-    sjs.loggr.info('Loading ' + v);
-    memo.push( v );
-    return memo;
-  }, [], R.flatten(rc));
-}
-
-/////////////////////////////////////////////////////////////////////////////
-/**
- * @class MyLoaderScene
- */
-const MyLoaderScene = cc.Scene.extend(/** @lends MyLoaderScene# */{
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;class MyLoaderScene
+const MyLoaderScene = cc.Scene.extend({
 
   init() { return true; },
 
@@ -265,10 +198,7 @@ sjs.loggr.debug(sjs.jsonfy(xcfg.game));
 sjs.loggr.info("Registered game start state - " + ss1);
 sjs.loggr.info("Loaded and running. OK");
 
-/*@@
-return xbox;
-@@*/
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;EOF
 
-//////////////////////////////////////////////////////////////////////////////
-//EOF
 
